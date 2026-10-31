@@ -2,6 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
+- Windows: checking whether a fetch is running no longer sends Ctrl+C to that process.
 - Keeping the sign-in is RealRead's job again. The limit of 3 automatic re-sign-ins a day is replaced by
   10 minutes between attempts (a ceiling of 48 a day stops failing loops). Without a direct link, or when a
   link stops on a page that wants a click, RealRead clicks through as a person would, but never types

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -17,6 +19,10 @@ from pathlib import Path
 from playwright.async_api import BrowserContext, async_playwright
 
 from .config import Config
+
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_ACCESS_DENIED = 5
+_STILL_ACTIVE = 259
 
 
 def cdp_url(cfg: Config) -> str:
@@ -87,19 +93,43 @@ def _in_use_dir(cfg: Config) -> Path:
     return cfg.library / ".realread-in-use"
 
 
+def _process_alive(pid: int) -> bool:
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass  # it exists, under another user
+        return True
+    # On Windows os.kill(pid, 0) does not test: it sends Ctrl+C.
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def fetches_running(cfg: Config) -> list[int]:
     """Processes fetching through the dedicated Chrome right now; leftovers of dead ones are removed."""
     running = []
     folder = _in_use_dir(cfg)
     for marker in folder.glob("*") if folder.exists() else ():
         pid = int(marker.name.split("-", 1)[0])
-        try:
-            os.kill(pid, 0)
+        if _process_alive(pid):
             running.append(pid)
-        except ProcessLookupError:
+        else:
             marker.unlink(missing_ok=True)
-        except PermissionError:
-            running.append(pid)
     return running
 
 
